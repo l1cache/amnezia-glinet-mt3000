@@ -32,7 +32,7 @@ if installed["kernel"]["V"] != sys.argv[2] or module["V"] != sys.argv[3]:
 dependencies = module["D"].split()
 if f"kernel={sys.argv[2]}" not in dependencies:
     raise SystemExit("The stock module does not declare the expected kernel dependency.")
-print(",".join(dependencies))
+print(" ".join(dependencies))
 PY
 )
 
@@ -54,6 +54,7 @@ fakeroot staging_dir/host/bin/apk mkpkg \
     --info license:GPL-2.0-only \
     --info url:https://amnezia.org/ \
     --info "depends:$dependencies" \
+    --info provides:kmod-amneziawg-any \
     --files "$work/package" \
     --output "bin/stock-kmod/kmod-amneziawg-$STOCK_AWG_KMOD.apk"
 

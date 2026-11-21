@@ -32,7 +32,7 @@ The source rebuild uses GL.iNet's build configuration with the public OpenWrt 25
 
 ### Evaluate and install the APKs manually
 
-1. Check the build report against the installed firmware and verify `sha256sum -c SHA256SUMS` from the unpacked artifact. Back up the router configuration and have the original firmware and package versions available for recovery.
+1. Check the build report against the installed firmware and verify `sha256sum -c SHA256SUMS` from the unpacked artifact. Back up the router configuration and have the original firmware and package versions available for recovery. Enable LuCI from GL.iNet's **System → Advanced Settings** page if it is missing. [GL.iNet LuCI guide](https://docs.gl-inet.com/router/en/4/interface_guide/advanced_settings/)
 2. Copy the APKs into a dedicated directory such as `/tmp/awg31` on the router. Build `1205` already has the stock kernel module, so with the default artifact you can leave it installed and simulate adding only the tools and LuCI. The bundle also contains an unsigned APK of the same stock module if you need to reinstall it for this exact firmware build.
 
    ```sh
