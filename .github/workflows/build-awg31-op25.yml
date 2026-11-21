@@ -1,0 +1,128 @@
+name: Build experimental AWG 3.1 APKs for GL-MT3000 OP25
+
+on:
+  workflow_dispatch:
+    inputs:
+      openwrt_commit:
+        description: GL.iNet firmware source commit (40 hex digits)
+        required: true
+        default: '981c978eff636fc7d81f0ed17b00e2a6317c949a'
+        type: string
+      expected_kernel:
+        description: Exact installed APK kernel version (defaults to OP25 beta2 build 1205)
+        required: true
+        default: '6.12.112~9469a6c8c449c47e503c05678ea1559d-r1'
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  AWG_COMMIT: '86f89bce58e01cd0793b944bf8a998124fcc172f'
+  AWG_MODULE_COMMIT: '63ed35de3d3f135b17e8eae0b84949e7700303be'
+  AWG_TOOLS_COMMIT: 'ee0f0a9aa34ff0a0da4b3433b9512781cfe02843'
+  OPENWRT_COMMIT: ${{ inputs.openwrt_commit }}
+  EXPECTED_KERNEL: ${{ inputs.expected_kernel }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Validate inputs and start build report
+        run: |
+          mkdir -p diagnostics
+          printf 'Target: GL-MT3000 4.11.0-op25 (mediatek/filogic)\nExpected kernel APK version: %s\nOpenWrt commit: %s\n' \
+            "$EXPECTED_KERNEL" "$OPENWRT_COMMIT" > diagnostics/build-report.txt
+          if [[ ! "$OPENWRT_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Provide a full OpenWrt commit SHA.' | tee -a diagnostics/build-report.txt
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_KERNEL" =~ ^6\.12\.[0-9]+~[0-9a-f]{32}-r[0-9]+$ ]]; then
+            echo 'Provide the full installed kernel APK version, including Linux release, hash and package revision.' | tee -a diagnostics/build-report.txt
+            exit 1
+          fi
+
+      - name: Checkout workflow and vendor build configuration
+        uses: actions/checkout@v4
+        with:
+          path: meta
+          persist-credentials: false
+
+      - name: Checkout OpenWrt source
+        uses: actions/checkout@v4
+        with:
+          repository: gl-inet/gl-openwrt
+          ref: ${{ env.OPENWRT_COMMIT }}
+          path: owrt
+          persist-credentials: false
+
+      - name: Checkout AWG 3.1 package recipes
+        uses: actions/checkout@v4
+        with:
+          repository: 2Grey/awg-openwrt
+          ref: ${{ env.AWG_COMMIT }}
+          path: awg
+          persist-credentials: false
+
+      - name: Install OpenWrt build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison gawk gettext git libncurses-dev libssl-dev \
+            libelf-dev python3 python3-setuptools rsync unzip file wget curl xz-utils \
+            zlib1g-dev libzstd-dev zstd subversion cmake ninja-build patch pkgconf swig time
+          df -h .
+
+      - name: Install pinned feeds and configure target
+        working-directory: owrt
+        run: bash ../meta/scripts/prepare-awg31-op25.sh
+
+      - name: Check kernel configuration ABI before compilation
+        working-directory: owrt
+        run: bash ../meta/scripts/check-op25-kernel.sh preflight
+
+      - name: Build tools, toolchain and kernel
+        working-directory: owrt
+        run: |
+          jobs=$(nproc)
+          make -j"$jobs" tools/install V=s
+          make -j"$jobs" toolchain/install V=s
+          make -j"$jobs" target/linux/compile V=s
+          bash ../meta/scripts/check-op25-kernel.sh compiled
+
+      - name: Compile and verify the three APK packages
+        id: packages
+        working-directory: owrt
+        run: |
+          for package in kmod-amneziawg amneziawg-tools luci-proto-amneziawg; do
+            make -j"$(nproc)" "package/awg31/$package/compile" V=s
+          done
+          bash ../meta/scripts/collect-awg31-apks.sh
+
+      - name: Summarize the build
+        if: always()
+        run: |
+          if [[ -f diagnostics/build-report.txt ]]; then
+            cat diagnostics/build-report.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload experimental APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: awg31-mt3000-op25-experimental
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: awg31-mt3000-op25-diagnostics
+          path: diagnostics/
+          if-no-files-found: error
+          retention-days: 14
