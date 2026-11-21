@@ -20,6 +20,10 @@ on:
         required: true
         default: '6.12.112~9469a6c8c449c47e503c05678ea1559d-r1'
         type: string
+      publish_prerelease:
+        description: Publish the successful stock-kernel build as an experimental GitHub prerelease
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -166,3 +170,49 @@ jobs:
           path: diagnostics/
           if-no-files-found: error
           retention-days: 14
+
+  prerelease:
+    needs: build
+    if: inputs.publish_prerelease && inputs.build_mode == 'stock-kernel' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download the APKs from this build
+        uses: actions/download-artifact@v4
+        with:
+          name: awg31-mt3000-op25-experimental
+          path: release-assets
+
+      - name: Verify the release files
+        working-directory: release-assets
+        shell: bash
+        run: |
+          sha256sum --check --strict SHA256SUMS
+          test -s build-report.txt
+
+      - name: Publish experimental prerelease
+        working-directory: release-assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s failglob
+          tag="awg31-op25-beta2-build1205-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          notes="$RUNNER_TEMP/awg31-release-notes.md"
+          cat > "$notes" <<EOF
+          Experimental AmneziaWG 3.1 APKs for the **GL-MT3000** running **4.11.0-op25 beta2, build 1205**.
+
+          The tools and LuCI APKs were compiled in this run. The kernel APK contains the stock GL.iNet module. If the stock module is already installed, keep it and install only the tools and LuCI APKs. Router runtime and GL.iNet VPN integration still need testing.
+
+          [Build run](https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) · [Installation guide](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/README.md#experimental-awg-31-packages-for-gl-mt3000-op25)
+          EOF
+          url=$(gh release create "$tag" \
+            ./kmod-amneziawg-*.apk ./amneziawg-tools-*.apk ./luci-proto-amneziawg-*.apk \
+            ./build-report.txt ./SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title 'Experimental AWG 3.1 for GL-MT3000 OP25 beta2 build 1205' \
+            --notes-file "$notes" --prerelease --latest=false)
+          printf 'Experimental prerelease published at %s\n' "$url"
+          printf '[Experimental prerelease](%s)\n' "$url" >> "$GITHUB_STEP_SUMMARY"
