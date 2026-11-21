@@ -5,7 +5,13 @@ report=../diagnostics/build-report.txt
 firmware=mt3000-op-4.11.0-op25_beta2-1205-1116-1794798505.bin
 firmware_sha=7a2913787e880e001c29b7c3b012c56058a70bc23a03c530952a520c577f6421
 work=$(mktemp -d)
-trap 'rm -rf -- "$work"' EXIT
+cleanup() {
+    if [[ -d "$work/package" ]]; then
+        sudo chown -R -- "$(id -u):$(id -g)" "$work/package"
+    fi
+    rm -rf -- "$work"
+}
+trap cleanup EXIT
 
 curl --fail --silent --show-error --location --retry 3 --output "$work/$firmware" \
     "https://fw.gl-inet.com/firmware/mt3000-open/testing/$firmware"
@@ -45,8 +51,9 @@ for member in "$module" "$manifest"; do
     test -s "$work/package/$member"
 done
 chmod 0644 "$work/package/$module" "$work/package/$manifest"
+sudo chown -R root:root -- "$work/package"
 mkdir -p bin/stock-kmod
-fakeroot staging_dir/host/bin/apk mkpkg \
+staging_dir/host/bin/apk mkpkg \
     --info name:kmod-amneziawg \
     --info "version:$STOCK_AWG_KMOD" \
     --info arch:aarch64_cortex-a53 \
