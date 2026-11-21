@@ -3,6 +3,13 @@ name: Build experimental AWG 3.1 APKs for GL-MT3000 OP25
 on:
   workflow_dispatch:
     inputs:
+      build_mode:
+        description: Use the stock firmware module or test a kernel rebuild
+        type: choice
+        default: stock-kernel
+        options:
+          - stock-kernel
+          - rebuild-kernel
       openwrt_commit:
         description: GL.iNet firmware source commit (40 hex digits)
         required: true
@@ -23,6 +30,8 @@ env:
   AWG_TOOLS_COMMIT: 'ee0f0a9aa34ff0a0da4b3433b9512781cfe02843'
   OPENWRT_COMMIT: ${{ inputs.openwrt_commit }}
   EXPECTED_KERNEL: ${{ inputs.expected_kernel }}
+  BUILD_MODE: ${{ inputs.build_mode }}
+  STOCK_AWG_KMOD: '6.12.112.3.1~4569c4c-r1'
 
 jobs:
   build:
@@ -35,14 +44,20 @@ jobs:
       - name: Validate inputs and start build report
         run: |
           mkdir -p diagnostics
-          printf 'Target: GL-MT3000 4.11.0-op25 (mediatek/filogic)\nExpected kernel APK version: %s\nOpenWrt commit: %s\n' \
-            "$EXPECTED_KERNEL" "$OPENWRT_COMMIT" > diagnostics/build-report.txt
+          printf 'Target: GL-MT3000 4.11.0-op25 (mediatek/filogic)\nBuild mode: %s\nExpected kernel APK version: %s\nOpenWrt commit: %s\n' \
+            "$BUILD_MODE" "$EXPECTED_KERNEL" "$OPENWRT_COMMIT" > diagnostics/build-report.txt
           if [[ ! "$OPENWRT_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
             echo 'Provide a full OpenWrt commit SHA.' | tee -a diagnostics/build-report.txt
             exit 1
           fi
           if [[ ! "$EXPECTED_KERNEL" =~ ^6\.12\.[0-9]+~[0-9a-f]{32}-r[0-9]+$ ]]; then
             echo 'Provide the full installed kernel APK version, including Linux release, hash and package revision.' | tee -a diagnostics/build-report.txt
+            exit 1
+          fi
+          if [[ "$BUILD_MODE" == stock-kernel ]] &&
+            [[ "$OPENWRT_COMMIT" != 981c978eff636fc7d81f0ed17b00e2a6317c949a ||
+               "$EXPECTED_KERNEL" != 6.12.112~9469a6c8c449c47e503c05678ea1559d-r1 ]]; then
+            echo 'The stock module and SDK are pinned to OP25 beta2 build 1205.' | tee -a diagnostics/build-report.txt
             exit 1
           fi
 
@@ -53,6 +68,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout OpenWrt source
+        if: inputs.build_mode == 'rebuild-kernel'
         uses: actions/checkout@v4
         with:
           repository: gl-inet/gl-openwrt
@@ -74,18 +90,34 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential clang flex bison gawk gettext git libncurses-dev libssl-dev \
             libelf-dev python3 python3-setuptools rsync unzip file wget curl xz-utils \
-            zlib1g-dev libzstd-dev zstd subversion cmake ninja-build patch pkgconf swig time
+            zlib1g-dev libzstd-dev zstd subversion cmake ninja-build patch pkgconf swig time \
+            fakeroot squashfs-tools
           df -h .
+
+      - name: Set up the pinned OpenWrt userspace SDK
+        if: inputs.build_mode == 'stock-kernel'
+        run: |
+          archive=openwrt-sdk-25.12.6-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+          sha=1c04ac47bdfc361d6aab299eb520d570e368013dedcb8d29cf39dc7168ae642e
+          curl --fail --silent --show-error --location --retry 3 --output "$archive" \
+            "https://downloads.openwrt.org/releases/25.12.6/targets/mediatek/filogic/$archive"
+          printf '%s  %s\n' "$sha" "$archive" | sha256sum --check
+          mkdir owrt
+          tar --zstd -xf "$archive" -C owrt --strip-components=1
+          rm -- "$archive"
+          printf 'Userspace SDK: %s\nSDK SHA256: %s\n' "$archive" "$sha" >> diagnostics/build-report.txt
 
       - name: Install pinned feeds and configure target
         working-directory: owrt
         run: bash ../meta/scripts/prepare-awg31-op25.sh
 
       - name: Check kernel configuration ABI before compilation
+        if: inputs.build_mode == 'rebuild-kernel'
         working-directory: owrt
         run: bash ../meta/scripts/check-op25-kernel.sh preflight
 
       - name: Build tools, toolchain and kernel
+        if: inputs.build_mode == 'rebuild-kernel'
         working-directory: owrt
         run: |
           jobs=$(nproc)
@@ -94,11 +126,19 @@ jobs:
           make -j"$jobs" target/linux/compile V=s
           bash ../meta/scripts/check-op25-kernel.sh compiled
 
-      - name: Compile and verify the three APK packages
-        id: packages
+      - name: Build or package the AmneziaWG kernel module
         working-directory: owrt
         run: |
-          for package in kmod-amneziawg amneziawg-tools luci-proto-amneziawg; do
+          if [[ "$BUILD_MODE" == stock-kernel ]]; then
+            bash ../meta/scripts/package-stock-awg-kmod.sh
+          else
+            make -j"$(nproc)" package/awg31/kmod-amneziawg/compile V=s
+          fi
+
+      - name: Compile tools and LuCI, then verify the packages
+        working-directory: owrt
+        run: |
+          for package in amneziawg-tools luci-proto-amneziawg; do
             make -j"$(nproc)" "package/awg31/$package/compile" V=s
           done
           bash ../meta/scripts/collect-awg31-apks.sh

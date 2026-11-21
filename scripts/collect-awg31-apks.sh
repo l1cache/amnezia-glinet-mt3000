@@ -22,8 +22,11 @@ if [[ "$dependency" != "kernel=$EXPECTED_KERNEL" ]]; then
     echo 'The module APK does not require the exact firmware kernel version.' | tee -a "$report"
     exit 1
 fi
+if [[ "$BUILD_MODE" == stock-kernel ]]; then
+    grep -Fxq "    - kmod-amneziawg=$STOCK_AWG_KMOD" ../diagnostics/amneziawg-tools.apk-metadata.txt
+fi
 
-echo 'The kernel package dependency matches. Router runtime and GL.iNet integration are unverified. EXPERIMENTAL.' >> "$report"
+echo 'The module APK targets the expected firmware kernel. Router runtime and GL.iNet integration are unverified. EXPERIMENTAL.' >> "$report"
 mkdir -p ../artifacts
 cp "${apk_files[@]}" "$report" ../artifacts/
 cd ../artifacts
